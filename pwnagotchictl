@@ -76,7 +76,7 @@ function show_help()
 function check_require()
 {
     local TOOL=$(whereis -b $1 | sed 's/^[^:]*: *//')
-    if [ -z $TOOL ]; then 
+    if [[ -z $TOOL ]]; then 
         echo "You need $1 for this."
         exit 1
     fi
@@ -101,7 +101,7 @@ function check_file_exist()
     local CURL=$(check_require "curl")
     local NBR=$($CURL -LI "$1" 2>> $LOG | grep "Status" | 
                     grep "$CODE_CURL_OK" | wc -l)
-    if [ $NBR -gt 0 ]; then
+    if [[ $NBR -gt 0 ]]; then
         return 0
     else
         return 1
@@ -111,13 +111,13 @@ function check_file_exist()
 function getter()
 {
     local CURL=$(check_require "curl")
-    if [ -z $CURL ]; then 
+    if [[ -z $CURL ]]; then 
         echo "You need curl for this."
         exit 1
     fi
     FILE=$1
     check_file_exist "$FILE"
-    if [ $? -eq 0 ]; then
+    if [[ $? -eq 0 ]]; then
          $CURL  --remote-name -L "$FILE" >> $LOG 2>&1
         echo "OK"
     else
@@ -199,7 +199,7 @@ function check_device_presence()
 function check_device_connection()
 {
     local CONNECTED=$(ifconfig $IFACE | grep "<UP" | wc -l)
-    if [ $CONNECTED -eq 0 ]; then
+    if [[ $CONNECTED -eq 0 ]]; then
         echo "Your pwnagotchi is not connected to the machine."
         echo "Plug your device in a USB port and re-run this script"
         return 1
@@ -228,28 +228,28 @@ function connect()
 {
     echo "+ Start connect $(date '+%HH:%MM:%SS'):" >> $LOG
     ping -q -t 2 -c 1 $IP >> $LOG 2>&1
-    if [ $? -eq 0 ]; then return 0; fi;
-    if ! [ $(whoami) = "root" ]; then
+    if [[ $? -eq 0 ]]; then return 0; fi;
+    if ! [[ $(whoami) = "root" ]]; then
         echo "You need to be root or use sudo to connect your pwnagotchi."
         exit 1
     fi
     if [[ $NAT = "true" ]]; then
         echo -n "+ IP forwarding activation: " | tee -a $LOG
         echo "" >> $LOG
-        if [ "$(sysctl net.inet.ip.forwarding)" = 0 ]; then
+        if [[ "$(sysctl net.inet.ip.forwarding)" = 0 ]]; then
             sysctl net.inet.ip.forwarding=1 >> $LOG 2>&1
         fi
-        if [ $? -eq 0 ]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+        if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
     fi
     echo -n "+ Interface activation: " | tee -a $LOG
     echo "" >> $LOG
     ifconfig $IFACE inet $IP netmask 255.255.255.0 >> $LOG 2>&1
-    if [ $? -eq 0 ]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+    if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
     if [[ $NAT = "true" ]]; then
         echo -n "+ PF rules loading: " | tee -a $LOG
         echo "" >> $LOG
         echo $PF_RULES | pfctl -a pwnagotchi_rules -f -
-        if [ $? -eq 0 ]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+        if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
     fi
     echo "+ Stop connect $(date '+%HH:%MM:%SS'):" >> $LOG
 }
@@ -280,7 +280,7 @@ function update_files()
     echo "" >> $LOG
     local ARCHIVE="./${ARCHIVE_PREFX}${VERSION}.img"
     mdconfig -f $ARCHIVE -u 0 >> $LOG 2>&1
-    if [ $? -eq 0 ]; then
+    if [[ $? -eq 0 ]]; then
         echo "OK"
     else
         echo "FAIL";
