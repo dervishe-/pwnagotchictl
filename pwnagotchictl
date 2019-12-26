@@ -1,0 +1,476 @@
+#!/usr/bin/env bash
+#
+# vim: foldmarker={,} ts=4
+# Help to manage a pwnagotchi
+# author: Alex Keledjian <dervishe@protonmail.ch>
+#
+
+IP="10.0.0.1"
+IP_PWNAGOTCHI="10.0.0.2"
+IFACE=ue0
+USER=pi
+CODE_CURL_OK="302"
+PF_RULES="pass from $IFACE:network to any keep state"
+FILES_TO_BACKUP="/{root/{handshakes,peers,brain.{json,nn}},etc/{localtime,locale.gen,hostname,hosts,timezone,pwnagotchi,ssh,passwd,shadow,group,gshadow},home}"
+BACKUP_NAME=pwnagotchi-$(date +"%F").tar.gz
+REPOS=https://github.com/evilsocket/pwnagotchi.git
+ARCHIVE_URL_PREFX="https://github.com/evilsocket/pwnagotchi/releases/download/v"
+ARCHIVE_PREFX="pwnagotchi-raspbian-lite-v"
+VERSION_LOCATION="/usr/local/src/pwnagotchi/pwnagotchi/__init__.py"
+REMOTE_SIG="false"
+KEEP_FILES="false"
+LOG="/dev/null"
+NAT="false"
+SDCARD=""
+
+FLAG_UPGRADE="false"
+REMOTE_SIG="false"
+KEEP_FILES="false"
+
+function show_help()
+{
+    echo "Usage: $(basename $0) [-hcLrbUkn] [-g TAG] [-i USB_IFACE] [-u USER] [-l FILE] [-w DEV_TARGET]
+    options list:
+        -h, --help          Show this message.
+
+        -c, --connect       Setup the networking ($IFACE) once the pwnagotchi 
+                            is connected to the USB port. Require root permissions.
+
+        -L, --list-tags     Retrieve all the tags from the remote repository.
+
+        -g TAG              Get the VERSION downloaded, unziped and veryfied.
+
+        -r, --remote-sig    Use the remote image signature instead of the one 
+                            located in the archive.
+
+        -b, --backup        Perform a backup of handshakes, brain.*, and 
+                            /etc/pwnagotchi from your pwnagotchi to your computer
+
+        -U, --upgrade       Perform an upgrade of the pwnagotchi with backup, i.e: 
+                            Download of the latest image, signature verification, 
+                            backup of the existang data and config and copying back
+                            the files in the pwnagotchi and finally, nice shutdown.
+                            You can specify the file to use as a backup with: -f BACKUP_FILE
+
+        -i USB_IFACE        Spécify the usb interface (default: $IFACE). This flag
+                            must be placed before the flags involving a connection
+                            to the pwnagotchi.
+
+        -u USER             The user on the pwnagotchi (default: $USER)
+
+        -l FILE             The file where the log goes (default: $LOG)
+
+        -k, --keep-files    Kepp the downloaded files (zip archive and sha256 file)
+                            Those files are erased by default if all went well.
+
+        -n, --nat           Activate the  NAT locally (Actually only for BSD with PF)
+
+        -w DEV_TARGET       Write the image created to DEV_TARGET
+
+        -R BACKUP_FILE      Restore the BACKUP_FILE
+
+        -f BACKUP_FILE      Specify the file to use as a backup (to upgrade)
+    "
+}
+
+function check_require()
+{
+    local TOOL=$(whereis -b $1 | sed 's/^[^:]*: *//')
+    if [ -z $TOOL ]; then 
+        echo "You need $1 for this."
+        exit 1
+    fi
+    echo $TOOL
+}
+
+function get_tags_list()
+{
+    local GIT=$(check_require "git")
+    local RESULTS=$($GIT ls-remote --tags "$REPOS" | cut -d "/" -f 3 | 
+                    grep -v "}" | sed 's/^v//')
+    for VERSION in $RESULTS; do
+        local ARCHIVE="${ARCHIVE_PREFX}${VERSION}"
+        local CANDIDAT="${ARCHIVE_URL_PREFX}${VERSION}/${ARCHIVE}.zip"
+        check_file_exist $CANDIDAT
+        if [[ $? -eq 0 ]]; then echo $VERSION; fi
+    done
+}
+
+function check_file_exist()
+{
+    local CURL=$(check_require "curl")
+    local NBR=$($CURL -LI "$1" 2>> $LOG | grep "Status" | 
+                    grep "$CODE_CURL_OK" | wc -l)
+    if [ $NBR -gt 0 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function getter()
+{
+    local CURL=$(check_require "curl")
+    if [ -z $CURL ]; then 
+        echo "You need curl for this."
+        exit 1
+    fi
+    FILE=$1
+    check_file_exist "$FILE"
+    if [ $? -eq 0 ]; then
+         $CURL  --remote-name -L "$FILE" >> $LOG 2>&1
+        echo "OK"
+    else
+        echo "FAILED"
+        exit 1
+    fi
+}
+
+function get_tag()
+{
+    local VERSION=$1
+    local ARCHIVE="${ARCHIVE_PREFX}${VERSION}"
+    echo "+ Start get_tag $(date '+%HH:%MM:%SS'):" >> $LOG
+
+    local RESPONSE=""
+    if [[ -f ./${ARCHIVE}.sha256 ]]; then
+        echo -n "The archive signature already exists localy, delete it ? (y/N): "
+        read RESPONSE
+        if [[ $RESPONSE = "y" || $RESPONSE = "Y" ]]; then 
+            rm ./${ARCHIVE}.sha256
+            RESPONSE="Y"
+        fi
+    fi
+    if [[ $REMOTE_SIG = "true" && ($RESPONSE = "Y" || ! -f ./${ARCHIVE}.sha256) ]]; then
+        echo -n "+ Archive signature download: " | tee -a $LOG
+        echo "" >> $LOG
+        getter "${ARCHIVE_URL_PREFX}${VERSION}/${ARCHIVE}.sha256"
+    fi
+
+    RESPONSE=""
+    if [[ -f ./${ARCHIVE}.img ]]; then
+        echo -n "The system image already exists localy, delete it ? (y/N): "
+        read RESPONSE
+        if [[ $RESPONSE = "y" || $RESPONSE = "Y" ]]; then
+            rm ./${ARCHIVE}.img
+            RESPONSE="Y"
+        fi
+    fi
+    if [[ $RESPONSE = "Y" || ! -f ./${ARCHIVE}.img ]]; then
+        echo -n "+ Archive download: " | tee -a $LOG
+        echo "" >> $LOG
+        getter "${ARCHIVE_URL_PREFX}${VERSION}/${ARCHIVE}.zip"
+
+        echo -n "+ Image extraction: " | tee -a $LOG
+        echo "" >> $LOG
+        if [[ -f ./${ARCHIVE}.sha256 ]]; then 
+            unzip -n -p ./${ARCHIVE}.zip ${ARCHIVE}.img > ./${ARCHIVE}.img 2>> $LOG
+        else
+            unzip -n ./${ARCHIVE}.zip >> $LOG 2>&1
+        fi
+        if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+
+        echo -n "+ Image signature check: " | tee -a $LOG
+        echo "" >> $LOG
+        local RESULT=$(shasum -a 256 -c ./${ARCHIVE}.sha256 2>> $LOG | grep "OK" | wc -l)
+        if [[ $RESULT -gt 0 ]]; then 
+            if [[ $KEEP_FILES = "false" ]]; then
+                rm "./${ARCHIVE}".{zip,sha256} >> $LOG 2>&1
+            fi
+            echo "OK"
+        else 
+            echo "FAILED"
+            exit 1
+        fi
+    fi
+    echo "+ End get_tag $(date '+%HH:%MM:%SS'):" >> $LOG
+}
+
+function check_device_presence()
+{
+    ifconfig $IFACE >> $LOG 2>&1
+    if [[ $? -eq 1 ]]; then
+        echo "Your pwnagotchi is not reachable, plug it in a USB port"
+        echo "or specify another port with the 'i' option"
+        exit 1;
+    fi
+}
+
+function check_device_connection()
+{
+    local CONNECTED=$(ifconfig $IFACE | grep "<UP" | wc -l)
+    if [ $CONNECTED -eq 0 ]; then
+        echo "Your pwnagotchi is not connected to the machine."
+        echo "Plug your device in a USB port and re-run this script"
+        return 1
+    else
+        return 0
+    fi
+}
+
+function check_actual_version()
+{
+    local VERSION_FILE="actual_version"
+    local REMOTE_CMD="cat $VERSION_LOCATION | grep version | cut -d \" \" -f 3 | sed \"s/'//g\""
+    ssh ${USER}@$IP_PWNAGOTCHI "$REMOTE_CMD" > $VERSION_FILE 2>> $LOG
+    local RESULT=$?
+    if [[ $RESULT -eq 0 ]]; then 
+        local VERSION=$(cat $VERSION_FILE)
+        rm $VERSION_FILE
+        echo $VERSION
+    else 
+        echo "FAIL"
+        exit $RESULT
+    fi
+}
+
+function connect()
+{
+    echo "+ Start connect $(date '+%HH:%MM:%SS'):" >> $LOG
+    ping -q -t 2 -c 1 $IP >> $LOG 2>&1
+    if [ $? -eq 0 ]; then return 0; fi;
+    if ! [ $(whoami) = "root" ]; then
+        echo "You need to be root or use sudo to connect your pwnagotchi."
+        exit 1
+    fi
+    if [[ $NAT = "true" ]]; then
+        echo -n "+ IP forwarding activation: " | tee -a $LOG
+        echo "" >> $LOG
+        if [ "$(sysctl net.inet.ip.forwarding)" = 0 ]; then
+            sysctl net.inet.ip.forwarding=1 >> $LOG 2>&1
+        fi
+        if [ $? -eq 0 ]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+    fi
+    echo -n "+ Interface activation: " | tee -a $LOG
+    echo "" >> $LOG
+    ifconfig $IFACE inet $IP netmask 255.255.255.0 >> $LOG 2>&1
+    if [ $? -eq 0 ]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+    if [[ $NAT = "true" ]]; then
+        echo -n "+ PF rules loading: " | tee -a $LOG
+        echo "" >> $LOG
+        echo $PF_RULES | pfctl -a pwnagotchi_rules -f -
+        if [ $? -eq 0 ]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+    fi
+    echo "+ Stop connect $(date '+%HH:%MM:%SS'):" >> $LOG
+}
+
+function backup_device()
+{
+    check_device_presence
+    connect
+    echo "+ Archive's name: $BACKUP_NAME" | tee -a $LOG
+    echo "" >> $LOG
+    local REMOTE_CMD="sudo tar -cpf - $FILES_TO_BACKUP | gzip -9"
+    ssh ${USER}@$IP_PWNAGOTCHI "$REMOTE_CMD" > $BACKUP_NAME 2>> $LOG
+    local RESULT=$?
+    echo -n "+ Backup: " | tee -a $LOG
+    echo "" >> $LOG
+    if [[ $RESULT -eq 0 ]]; then 
+        echo "OK"
+    else 
+        echo "FAIL"
+        exit $RESULT
+    fi
+}
+
+function update_files()
+{
+    VERSION=$1
+    echo -n "+ Creating virtual disk: " | tee -a $LOG
+    echo "" >> $LOG
+    local ARCHIVE="./${ARCHIVE_PREFX}${VERSION}.img"
+    mdconfig -f $ARCHIVE -u 0 >> $LOG 2>&1
+    if [ $? -eq 0 ]; then
+        echo "OK"
+    else
+        echo "FAIL";
+        exit 1;
+    fi
+
+    echo -n "+ Mounting root partition: " | tee -a $LOG
+    echo "" >> $LOG
+    local MOUNT_POINT="./pwn_mount_$(date +%s)"
+    if ! [[ -d $MOUNT_POINT ]]; then mkdir $MOUNT_POINT >> $LOG 2>&1; fi
+    mount -t ext2fs /dev/md0s2 $MOUNT_POINT >> $LOG 2>&1
+    if [[ $? -eq 0 ]]; then
+        echo "OK"
+    else
+        echo "FAIL";
+        mdconfig -d -u 0 >> $LOG 2>&1
+        rmdir $MOUNT_POINT
+        exit 1;
+    fi
+    echo -n "+ Mounting boot partition: " | tee -a $LOG
+    echo "" >> $LOG
+    mount -t msdos /dev/md0s1 ${MOUNT_POINT}/boot >> $LOG 2>&1
+    if [[ $? -eq 0 ]]; then
+        echo "OK"
+    else
+        echo "FAIL";
+        umount $MOUNT_POINT
+        rmdir $MOUNT_POINT
+        mdconfig -d -u 0 >> $LOG 2>&1
+        exit 1;
+    fi
+
+    echo -n "+ Copying files to the image: " | tee -a $LOG
+    echo "" >> $LOG
+    tar -xpzf $BACKUP_NAME -C $MOUNT_POINT >> $LOG 2>&1
+    if ! [[ $? -eq 0 ]]; then
+        echo "FAIL";
+        umount $MOUNT_POINT{/boot,} >> $LOG 2>&1
+        rmdir $MOUNT_POINT
+        mdconfig -d -u 0 >> $LOG 2>&1
+        exit 1;
+    fi
+    echo "OK"
+
+    echo -n "+ Cleaning: " | tee -a $LOG
+    echo "" >> $LOG
+    umount $MOUNT_POINT{/boot,} >> $LOG 2>&1
+    if ! [[ $? -eq 0 ]]; then
+        echo "FAIL";
+        cd - >> $LOG 2>&1
+        exit 1;
+    fi
+    mdconfig -d -u 0 >> $LOG 2>&1
+    if ! [[ $? -eq 0 ]]; then
+        echo "FAIL";
+        cd - >> $LOG 2>&1
+        exit 1;
+    fi
+    rmdir $MOUNT_POINT >> $LOG 2>&1
+    if ! [[ $? -eq 0 ]]; then
+        echo "FAIL";
+        cd - >> $LOG 2>&1
+        exit 1;
+    fi
+    echo "OK"
+}
+
+function build_media()
+{
+    VERSION=$1
+    local ARCHIVE="./${ARCHIVE_PREFX}${VERSION}.img"
+    local RESP=""
+    echo "You are about to write the image on the device: $SDCARD"
+    echo "Please check and confirm (y|N)"
+    read RESP
+    if [[ $RESP = "Y" || $RESP = "y" ]]; then
+        echo -n "+ Burning the image on the sdcard $SDCARD: "
+        dd if=$ARCHIVE of=$SDCARD bs=1024k >> $LOG 2>&1
+        if ! [[ $? -eq 0 ]]; then
+            echo "FAIL";
+            exit 1;
+        fi
+        echo "OK"
+        echo "Now, you can use your new card on the pwnagotchi !"
+    else
+        echo "Ok, goodbye !"
+        exit 0
+    fi
+}
+
+function online_restore()
+{
+    BACKUP_NAME=$1
+    echo -n "+ Restoring files and config: " | tee -a $LOG
+    echo "" >> $LOG
+    scp $BACKUP_NAME ${USER}@$IP_PWNAGOTCHI:~/. 2&>>1 $LOG
+    ssh ${USER}@$IP_PWNAGOTCHI \
+                    "sudo tar -xzpf $BACKUP_NAME -C /; sudo shutdown -r now"
+    echo "OK"
+}
+
+function upgrade()
+{
+    echo "Upgrading:"
+    check_device_presence
+    connect
+    echo -n "+ Installed version: " | tee -a $LOG
+    echo "" >> $LOG
+    local A_VERS=$(check_actual_version)
+    echo $A_VERS
+    echo -n "+ The candidat: " | tee -a $LOG
+    echo "" >> $LOG
+    local N_VERS=$(get_tags_list | sort -r | head -n 1)
+    echo $N_VERS
+    if [[ $N_VERS > $A_VERS ]]; then
+        echo -n "A new version is available, would you like to proceed ? (y|N) "
+        read RESPONSE
+        if ! [[ $RESPONSE = "y" || $RESPONSE = "Y" ]]; then exit 0; fi
+        get_tag $N_VERS
+        backup_device
+        update_files $N_VERS
+        echo -n "+ Clean shutdown: "
+        ssh ${USER}@$IP_PWNAGOTCHI "sudo shutdown -h now" 2>> $LOG
+        if [[ $? = 0 ]]; then
+            echo "OK"
+        else
+            echo "FAIL"
+            echo "You have to shut it (the pwnagotchi) down manually."
+        fi
+        echo "Once your pwnagotchi is off, insert the SDCard on your computer."
+        local RESPONSE=""
+        echo "Press a key once your SDcard is inserted in your computer."
+        read RESPONSE
+        echo "The new image is about to be written on it."
+        while ! [[ -c $SDCARD ]]; do
+            echo -n "Specify the device to write on (full path): "
+            read SDCARD
+        done
+        build_media $N_VERS
+    else
+        echo "Your pwnagotchi is up to date."
+    fi
+}
+
+
+
+SYSTEM=$(uname -s)
+
+while getopts "hcbLUrkng:i:u:l:w:R:f:-:" option; do
+    case $option in
+        h ) show_help
+            exit 0;;
+        c ) FLAG_CONNECT="true";;
+        b ) FLAG_BACKUP="true";;
+        L ) get_tags_list
+            exit 0;;
+        U ) FLAG_UPGRADE="true"; echo $OPTARG;;
+        r ) REMOTE_SIG="true" ;;
+        k ) KEEP_FILES="true" ;;
+        n ) NAT="true" ;;
+        g ) get_tag $OPTARG
+            exit 0;;
+        R ) online_restore $OPTARG
+            exit 0;;
+        i ) IFACE=$OPTARG ;;
+        u ) USER=$OPTARG ;;
+        l ) LOG=$OPTARG ;;
+        f ) BACKUP_NAME=$OPTARG ;;
+        w ) SDCARD=$OPTARG ;;
+        - ) case $OPTARG in
+                help ) show_help
+                    exit 0;;
+                connect ) FLAG_CONNECT="true";;
+                backup ) FLAG_BACKUP="true";;
+                list-tags ) get_tags_list
+                    exit 0;;
+                upgrade ) FLAG_UPGRADE="true";;
+                remote-sig ) REMOTE_SIG="true" ;;
+                keep-files ) KEEP_FILES="true" ;;
+                nat ) NAT="true" ;;
+                * ) echo "Unknown option: ${OPTARG}"
+                    show_help
+                    exit 1 ;;
+            esac ;;
+        ? ) echo "Unknown option: ${option}"
+            show_help
+            exit 1 ;;
+    esac
+done 2>> $LOG
+
+if [[ $FLAG_CONNECT = "true" ]]; then connect; fi
+if [[ $FLAG_BACKUP = "true" ]]; then backup_device; fi
+if [[ $FLAG_UPGRADE = "true" ]]; then upgrade; fi
