@@ -1,2 +1,2 @@
 # pwnagotchictl
-A little shell script to perform sevral admin task on a pwnagotchi
+A little shell script to perform several admin task on a pwnagotchi
