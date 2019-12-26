@@ -5,6 +5,7 @@
 # author: Alex Keledjian <dervishe@protonmail.ch>
 #
 
+OS=$(uname -s)
 IP="10.0.0.1"
 IP_PWNAGOTCHI="10.0.0.2"
 IFACE=ue0
@@ -51,6 +52,7 @@ function show_help()
                             backup of the existang data and config and copying back
                             the files in the pwnagotchi and finally, nice shutdown.
                             You can specify the file to use as a backup with: -f BACKUP_FILE
+                            >>> ONLY WORKS ON FreeBSD ACTUALLY <<<
 
         -i USB_IFACE        Spécify the usb interface (default: $IFACE). This flag
                             must be placed before the flags involving a connection
@@ -64,6 +66,7 @@ function show_help()
                             Those files are erased by default if all went well.
 
         -n, --nat           Activate the  NAT locally (Actually only for BSD with PF)
+                            >>> ONLY WORKS ON FreeBSD ACTUALLY <<<
 
         -w DEV_TARGET       Write the image created to DEV_TARGET
 
@@ -224,6 +227,7 @@ function check_actual_version()
     fi
 }
 
+# OS sensitive part
 function connect()
 {
     echo "+ Start connect $(date '+%HH:%MM:%SS'):" >> $LOG
@@ -234,22 +238,26 @@ function connect()
         exit 1
     fi
     if [[ $NAT = "true" ]]; then
-        echo -n "+ IP forwarding activation: " | tee -a $LOG
-        echo "" >> $LOG
-        if [[ "$(sysctl net.inet.ip.forwarding)" = 0 ]]; then
-            sysctl net.inet.ip.forwarding=1 >> $LOG 2>&1
+        if [[ $OS = "FreeBSD" ]]; then 
+            echo -n "+ IP forwarding activation: " | tee -a $LOG
+            echo "" >> $LOG
+            if [[ "$(sysctl net.inet.ip.forwarding)" = 0 ]]; then
+                sysctl net.inet.ip.forwarding=1 >> $LOG 2>&1
+            fi
+            if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
         fi
-        if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
     fi
     echo -n "+ Interface activation: " | tee -a $LOG
     echo "" >> $LOG
     ifconfig $IFACE inet $IP netmask 255.255.255.0 >> $LOG 2>&1
     if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
     if [[ $NAT = "true" ]]; then
-        echo -n "+ PF rules loading: " | tee -a $LOG
-        echo "" >> $LOG
-        echo $PF_RULES | pfctl -a pwnagotchi_rules -f -
-        if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+        if [[ $OS = "FreeBSD" ]]; then 
+            echo -n "+ PF rules loading: " | tee -a $LOG
+            echo "" >> $LOG
+            echo $PF_RULES | pfctl -a pwnagotchi_rules -f -
+            if [[ $? -eq 0 ]]; then echo "OK"; else echo "FAILED"; exit 1; fi;
+        fi
     fi
     echo "+ Stop connect $(date '+%HH:%MM:%SS'):" >> $LOG
 }
@@ -273,8 +281,14 @@ function backup_device()
     fi
 }
 
+# OS sensitive part
 function update_files()
 {
+    if ! [[ $OS = "FreeBSD" ]]; then 
+        echo "Unable to put the backup to the image"
+        echo "You need to be on FreeBSD"
+        exit 1
+    fi
     VERSION=$1
     echo -n "+ Creating virtual disk: " | tee -a $LOG
     echo "" >> $LOG
@@ -427,7 +441,6 @@ function upgrade()
 
 
 
-SYSTEM=$(uname -s)
 
 while getopts "hcbLUrkng:i:u:l:w:R:f:-:" option; do
     case $option in
