@@ -30,7 +30,7 @@ KEEP_FILES="false"
 
 function show_help()
 {
-    echo "Usage: $(basename $0) [-hcLrbUkn] [-g TAG] [-i USB_IFACE] [-u USER] [-l FILE] [-w DEV_TARGET]
+    echo "Usage: $(basename $0) [-hcLrbUkn] [-g TAG] [-i USB_IFACE] [-u USER] [-l FILE] [-w DEV_TARGET] [-R BBACKUP_FILE] [-f BBACKUP_FILE]
     options list:
         -h, --help          Show this message.
 
@@ -39,7 +39,8 @@ function show_help()
 
         -L, --list-tags     Retrieve all the tags from the remote repository.
 
-        -g TAG              Get the VERSION downloaded, unziped and veryfied.
+        -g TAG              Get the version identified by TAG  downloaded, unziped 
+                            and veryfied.
 
         -r, --remote-sig    Use the remote image signature instead of the one 
                             located in the archive.
@@ -65,10 +66,10 @@ function show_help()
         -k, --keep-files    Kepp the downloaded files (zip archive and sha256 file)
                             Those files are erased by default if all went well.
 
-        -n, --nat           Activate the  NAT locally (Actually only for BSD with PF)
+        -n, --nat           Activate the  NAT locally
                             >>> ONLY WORKS ON FreeBSD ACTUALLY <<<
 
-        -w DEV_TARGET       Write the image created to DEV_TARGET
+        -w DEV_TARGET       Specify the device full path where to write the image.
 
         -R BACKUP_FILE      Restore the BACKUP_FILE
 
